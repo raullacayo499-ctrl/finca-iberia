@@ -1,588 +1,434 @@
-from flask import Flask, render_template_string, request, redirect, url_for, session, g
+from flask import Flask, render_template_string, request, redirect, url_for, session
 import sqlite3
 
 app = Flask(__name__)
-app.secret_key = "finca_2026_clave_segura"
+app.secret_key = "finca_iberia_clave_segura_2026"
 
 # ================== USUARIOS ==================
 usuarios = {
-    "Administrador": {"clave": "guayacan", "rol": "jefe"},
-    "Adrian": {"clave": "1990", "rol": "miembro"},
-    "Mincho": {"clave": "1984", "rol": "miembro"},
-    "Erick": {"clave": "1994", "rol": "miembro"}
+    "admin": {"clave": "123456", "rol": "jefe"},
+    "familia": {"clave": "123456", "rol": "miembro"}
 }
 
 # ================== BASE DE DATOS ==================
-def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect('finca.db')
-        db.row_factory = sqlite3.Row
-    return db
-
 def init_db():
-    with app.app_context():
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS animales (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                numero TEXT NOT NULL UNIQUE,
-                madre TEXT,
-                padre TEXT,
-                estado TEXT,
-                ubicacion TEXT,
-                sexo TEXT,
-                raza TEXT,
-                edad TEXT,
-                peso TEXT,
-                observaciones TEXT
-            )
-        ''')
-        db.commit()
+    conn = sqlite3.connect('animales.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS animales
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  numero TEXT NOT NULL,
+                  tipo TEXT NOT NULL,
+                  raza TEXT,
+                  fecha_nacimiento TEXT,
+                  peso TEXT,
+                  genero TEXT,
+                  color TEXT,
+                  observaciones TEXT,
+                  dueño TEXT NOT NULL)''')
+    conn.commit()
+    conn.close()
 
-@app.teardown_appcontext
-def close_db(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
+init_db()
 
-# ================== PÁGINAS ==================
-@app.route('/')
-def inicio():
-    if 'usuario' not in session:
-        return redirect(url_for('login'))
-    return redirect(url_for('lista_animales'))
-
+# ================== PÁGINA DE INICIO DE SESIÓN ==================
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    mensaje = ""
     if request.method == 'POST':
         usuario = request.form.get('usuario', '').strip()
         clave = request.form.get('clave', '').strip()
         
-        # Convertir a minúsculas para evitar errores de mayúsculas
-        usuario_min = usuario.lower()
-        usuario_en_lista = None
+        for u, datos in usuarios.items():
+            if u.lower() == usuario.lower() and datos['clave'] == clave:
+                session['usuario'] = u
+                session['rol'] = datos['rol']
+                return redirect(url_for('lista'))
         
-        for u in usuarios:
-            if u.lower() == usuario_min:
-                usuario_en_lista = u
-                break
-        
-        if usuario_en_lista and usuarios[usuario_en_lista]['clave'] == clave:
-            session['usuario'] = usuario_en_lista
-            session['rol'] = usuarios[usuario_en_lista]['rol']
-            return redirect(url_for('lista_animales'))
-        else:
-            mensaje = "❌ Usuario o contraseña incorrectos. Inténtalo de nuevo."
+        return render_template_string(LOGIN_HTML, error=True)
     
-    return render_template_string('''
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Iniciar Sesión - Finca Iberia</title>
-    <style>
-        * { box-sizing: border-box; font-family: Arial, sans-serif; }
-        body { 
-            background: linear-gradient(135deg, #4a7c59 0%, #2c4a35 100%);
-            min-height: 100vh;
-            margin: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .login-box {
-            background: white;
-            border-radius: 12px;
-            padding: 30px;
-            width: 100%;
-            max-width: 400px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-        }
-        h2 { text-align: center; color: #2c4a35; margin-bottom: 25px; }
-        .campo { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; color: #333; font-weight: bold; }
-        input {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 6px;
-            font-size: 16px;
-        }
-        input:focus { outline: none; border-color: #4a7c59; }
-        button {
-            width: 100%;
-            padding: 14px;
-            background: #4a7c59;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 18px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        button:hover { background: #3a6347; }
-        .error { color: #d63031; text-align: center; margin-bottom: 15px; font-weight: bold; }
-    </style>
-</head>
-<body>
-    <div class="login-box">
-        <h2>🐄 Finca Iberia</h2>
-        <h3 style="text-align:center; color:#555; margin-top:-10px;">Iniciar Sesión</h3>
-        {% if mensaje %}<div class="error">{{ mensaje }}</div>{% endif %}
-        <form method="POST">
-            <div class="campo">
-                <label>Usuario:</label>
-                <input type="text" name="usuario" required autocomplete="off">
-            </div>
-            <div class="campo">
-                <label>Contraseña:</label>
-                <input type="password" name="clave" required>
-            </div>
-            <button type="submit">Entrar</button>
-        </form>
-    </div>
-</body>
-</html>
-    ''', mensaje=mensaje)
-
-@app.route('/lista')
-def lista_animales():
-    if 'usuario' not in session:
-        return redirect(url_for('login'))
-    
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute('SELECT * FROM animales ORDER BY numero')
-    animales = cursor.fetchall()
-    
-    return render_template_string('''
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lista de Animales - Finca Iberia</title>
-    <style>
-        * { box-sizing: border-box; font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        body { 
-            background: #f0f7f0;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .header {
-            background: #4a7c59;
-            color: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-        .header h1 { font-size: 22px; }
-        .btn {
-            padding: 10px 18px;
-            border: none;
-            border-radius: 6px;
-            font-size: 15px;
-            font-weight: bold;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-block;
-        }
-        .btn-nuevo { background: #27ae60; color: white; }
-        .btn-nuevo:hover { background: #219653; }
-        .btn-salir { background: #c0392b; color: white; }
-        .btn-salir:hover { background: #a93226; }
-        
-        .buscador {
-            margin-bottom: 20px;
-        }
-        .buscador input {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #4a7c59;
-            border-radius: 8px;
-            font-size: 16px;
-        }
-        
-        .lista-container {
-            background: white;
-            border-radius: 10px;
-            padding: 15px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        .animal-link {
-            display: block;
-            padding: 14px;
-            border-bottom: 1px solid #eee;
-            color: #2c4a35;
-            text-decoration: none;
-            font-size: 16px;
-        }
-        .animal-link:last-child { border-bottom: none; }
-        .animal-link:hover { background: #e8f5e9; }
-        .numero-animal { font-weight: bold; font-size: 18px; }
-        .vacio { text-align: center; color: #777; padding: 40px; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>🐄 Lista de Animales</h1>
-        <div>
-            <a href="{{ url_for('nuevo_animal') }}" class="btn btn-nuevo">+ Registrar Nuevo</a>
-            <a href="{{ url_for('logout') }}" class="btn btn-salir">Cerrar Sesión</a>
-        </div>
-    </div>
-
-    <div class="buscador">
-        <input type="text" id="buscar" placeholder="🔍 Buscar por número..." onkeyup="filtrar()">
-    </div>
-
-    <div class="lista-container">
-        {% if animales %}
-            {% for a in animales %}
-                <a href="{{ url_for('ver_animal', id=a['id']) }}" class="animal-link" id="fila-{{ a['numero'] }}">
-                    <span class="numero-animal">#{{ a['numero'] }}</span> — {{ a['raza'] or 'Sin raza' }} — {{ a['sexo'] or 'Sin sexo' }}
-                </a>
-            {% endfor %}
-        {% else %}
-            <p class="vacio">No hay animales registrados todavía.<br>Haz clic en "+ Registrar Nuevo" para empezar.</p>
-        {% endif %}
-    </div>
-
-    <script>
-        function filtrar() {
-            var busqueda = document.getElementById('buscar').value.toLowerCase();
-            var enlaces = document.querySelectorAll('.animal-link');
-            enlaces.forEach(function(enlace) {
-                var texto = enlace.textContent.toLowerCase();
-                if (texto.indexOf(busqueda) !== -1) {
-                    enlace.style.display = 'block';
-                } else {
-                    enlace.style.display = 'none';
-                }
-            });
-        }
-    </script>
-</body>
-</html>
-    ''', animales=animales)
-
-@app.route('/animal/<id>')
-def ver_animal(id):
-    if 'usuario' not in session:
-        return redirect(url_for('login'))
-    
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute('SELECT * FROM animales WHERE id = ?', (id,))
-    animal = cursor.fetchone()
-    
-    if not animal:
-        return "Animal no encontrado — <a href='" + url_for('lista_animales') + "'>Volver a la lista</a>"
-    
-    return render_template_string('''
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Animal #{{ animal['numero'] }} - Finca Iberia</title>
-    <style>
-        * { box-sizing: border-box; font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        body { 
-            background: #f0f7f0;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .btn-volver {
-            display: inline-block;
-            background: #666;
-            color: white;
-            padding: 10px 18px;
-            border-radius: 6px;
-            text-decoration: none;
-            margin-bottom: 20px;
-        }
-        .btn-volver:hover { background: #444; }
-        
-        .ficha {
-            background: white;
-            border-radius: 12px;
-            padding: 25px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-            max-width: 600px;
-            margin: 0 auto;
-        }
-        .ficha h2 {
-            text-align: center;
-            color: #4a7c59;
-            margin-bottom: 25px;
-            font-size: 24px;
-        }
-        .dato {
-            padding: 12px 0;
-            border-bottom: 1px solid #eee;
-        }
-        .dato:last-child { border-bottom: none; }
-        .etiqueta {
-            font-weight: bold;
-            color: #2c4a35;
-            display: inline-block;
-            min-width: 120px;
-        }
-        .valor { color: #333; }
-        .btn-editar {
-            display: block;
-            background: #f39c12;
-            color: white;
-            text-align: center;
-            padding: 12px;
-            border-radius: 6px;
-            text-decoration: none;
-            font-weight: bold;
-            margin-top: 25px;
-        }
-        .btn-editar:hover { background: #e67e22; }
-    </style>
-</head>
-<body>
-    <a href="{{ url_for('lista_animales') }}" class="btn-volver">← Volver a la lista</a>
-    
-    <div class="ficha">
-        <h2>🐂 Animal #{{ animal['numero'] }}</h2>
-        
-        <div class="dato"><span class="etiqueta">Número:</span> <span class="valor">{{ animal['numero'] }}</span></div>
-        <div class="dato"><span class="etiqueta">Madre:</span> <span class="valor">{{ animal['madre'] or '—' }}</span></div>
-        <div class="dato"><span class="etiqueta">Padre:</span> <span class="valor">{{ animal['padre'] or '—' }}</span></div>
-        <div class="dato"><span class="etiqueta">Estado:</span> <span class="valor">{{ animal['estado'] or '—' }}</span></div>
-        <div class="dato"><span class="etiqueta">Ubicación:</span> <span class="valor">{{ animal['ubicacion'] or '—' }}</span></div>
-        <div class="dato"><span class="etiqueta">Sexo:</span> <span class="valor">{{ animal['sexo'] or '—' }}</span></div>
-        <div class="dato"><span class="etiqueta">Raza:</span> <span class="valor">{{ animal['raza'] or '—' }}</span></div>
-        <div class="dato"><span class="etiqueta">Edad:</span> <span class="valor">{{ animal['edad'] or '—' }}</span></div>
-        <div class="dato"><span class="etiqueta">Peso:</span> <span class="valor">{{ animal['peso'] or '—' }}</span></div>
-        <div class="dato"><span class="etiqueta">Observaciones:</span> <span class="valor">{{ animal['observaciones'] or '—' }}</span></div>
-        
-        <a href="{{ url_for('editar_animal', id=animal['id']) }}" class="btn-editar">✏️ Editar este animal</a>
-    </div>
-</body>
-</html>
-    ''', animal=animal)
-
-@app.route('/nuevo', methods=['GET', 'POST'])
-def nuevo_animal():
-    if 'usuario' not in session:
-        return redirect(url_for('login'))
-    
-    if request.method == 'POST':
-        db = get_db()
-        cursor = db.cursor()
-        try:
-            cursor.execute('''
-                INSERT INTO animales (numero, madre, padre, estado, ubicacion, sexo, raza, edad, peso, observaciones)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                request.form.get('numero'),
-                request.form.get('madre'),
-                request.form.get('padre'),
-                request.form.get('estado'),
-                request.form.get('ubicacion'),
-                request.form.get('sexo'),
-                request.form.get('raza'),
-                request.form.get('edad'),
-                request.form.get('peso'),
-                request.form.get('observaciones')
-            ))
-            db.commit()
-            return redirect(url_for('lista_animales'))
-        except sqlite3.IntegrityError:
-            return "⚠️ Ya existe un animal con ese número. <a href='" + url_for('nuevo_animal') + "'>Volver</a>"
-    
-    return render_template_string('''
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Registrar Animal - Finca Iberia</title>
-    <style>
-        * { box-sizing: border-box; font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        body { 
-            background: #f0f7f0;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .btn-volver {
-            display: inline-block;
-            background: #666;
-            color: white;
-            padding: 10px 18px;
-            border-radius: 6px;
-            text-decoration: none;
-            margin-bottom: 20px;
-        }
-        .formulario {
-            background: white;
-            border-radius: 12px;
-            padding: 25px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-            max-width: 500px;
-            margin: 0 auto;
-        }
-        .formulario h2 {
-            text-align: center;
-            color: #4a7c59;
-            margin-bottom: 25px;
-        }
-        .campo { margin-bottom: 16px; }
-        label { display: block; margin-bottom: 6px; font-weight: bold; color: #2c4a35; }
-        input, select, textarea {
-            width: 100%;
-            padding: 10px;
-            border: 2px solid #ddd;
-            border-radius: 6px;
-            font-size: 15px;
-        }
-        input:focus, select:focus, textarea:focus { outline: none; border-color: #4a7c59; }
-        button {
-            width: 100%;
-            padding: 12px;
-            background: #4a7c59;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            margin-top: 10px;
-        }
-        button:hover { background: #3a6347; }
-    </style>
-</head>
-<body>
-    <a href="{{ url_for('lista_animales') }}" class="btn-volver">← Volver a la lista</a>
-    
-    <div class="formulario">
-        <h2>➕ Registrar Nuevo Animal</h2>
-        <form method="POST">
-            <div class="campo"><label>Número *</label><input type="text" name="numero" required></div>
-            <div class="campo"><label>Madre</label><input type="text" name="madre"></div>
-            <div class="campo"><label>Padre</label><input type="text" name="padre"></div>
-            <div class="campo"><label>Estado</label><input type="text" name="estado" placeholder="Ej: Vivo, Vendido, Muerto"></div>
-            <div class="campo"><label>Ubicación</label><input type="text" name="ubicacion" placeholder="Ej: Potrero 1"></div>
-            <div class="campo"><label>Sexo</label>
-                <select name="sexo">
-                    <option value="">Seleccionar...</option>
-                    <option value="Macho">Macho</option>
-                    <option value="Hembra">Hembra</option>
-                </select>
-            </div>
-            <div class="campo"><label>Raza</label><input type="text" name="raza"></div>
-            <div class="campo"><label>Edad</label><input type="text" name="edad" placeholder="Ej: 2 años"></div>
-            <div class="campo"><label>Peso</label><input type="text" name="peso" placeholder="Ej: 450 kg"></div>
-            <div class="campo"><label>Observaciones</label><textarea name="observaciones" rows="3"></textarea></div>
-            <button type="submit">💾 Guardar Animal</button>
-        </form>
-    </div>
-</body>
-</html>
-    ''')
-
-@app.route('/editar/<id>', methods=['GET', 'POST'])
-def editar_animal(id):
-    if 'usuario' not in session:
-        return redirect(url_for('login'))
-    
-    db = get_db()
-    cursor = db.cursor()
-    
-    if request.method == 'POST':
-        cursor.execute('''
-            UPDATE animales SET numero=?, madre=?, padre=?, estado=?, ubicacion=?, sexo=?, raza=?, edad=?, peso=?, observaciones=? WHERE id=?
-        ''', (
-            request.form.get('numero'),
-            request.form.get('madre'),
-            request.form.get('padre'),
-            request.form.get('estado'),
-            request.form.get('ubicacion'),
-            request.form.get('sexo'),
-            request.form.get('raza'),
-            request.form.get('edad'),
-            request.form.get('peso'),
-            request.form.get('observaciones'),
-            id
-        ))
-        db.commit()
-        return redirect(url_for('ver_animal', id=id))
-    
-    cursor.execute('SELECT * FROM animales WHERE id = ?', (id,))
-    animal = cursor.fetchone()
-    
-    return render_template_string('''
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Editar Animal - Finca Iberia</title>
-    <style>
-        * { box-sizing: border-box; font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        body { background: #f0f7f0; min-height: 100vh; padding: 20px; }
-        .btn-volver { display: inline-block; background: #666; color: white; padding: 10px 18px; border-radius: 6px; text-decoration: none; margin-bottom: 20px; }
-        .formulario { background: white; border-radius: 12px; padding: 25px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); max-width: 500px; margin: 0 auto; }
-        .formulario h2 { text-align: center; color: #f39c12; margin-bottom: 25px; }
-        .campo { margin-bottom: 16px; }
-        label { display: block; margin-bottom: 6px; font-weight: bold; color: #2c4a35; }
-        input, select, textarea { width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 6px; font-size: 15px; }
-        input:focus, select:focus, textarea:focus { outline: none; border-color: #4a7c59; }
-        button { width: 100%; padding: 12px; background: #f39c12; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; }
-        button:hover { background: #e67e22; }
-    </style>
-</head>
-<body>
-    <a href="{{ url_for('ver_animal', id=animal['id']) }}" class="btn-volver">← Volver al animal</a>
-    
-    <div class="formulario">
-        <h2>✏️ Editar Animal</h2>
-        <form method="POST">
-            <div class="campo"><label>Número *</label><input type="text" name="numero" value="{{ animal['numero'] }}" required></div>
-            <div class="campo"><label>Madre</label><input type="text" name="madre" value="{{ animal['madre'] or '' }}"></div>
-            <div class="campo"><label>Padre</label><input type="text" name="padre" value="{{ animal['padre'] or '' }}"></div>
-            <div class="campo"><label>Estado</label><input type="text" name="estado" value="{{ animal['estado'] or '' }}"></div>
-            <div class="campo"><label>Ubicación</label><input type="text" name="ubicacion" value="{{ animal['ubicacion'] or '' }}"></div>
-            <div class="campo"><label>Sexo</label>
-                <select name="sexo">
-                    <option value="">Seleccionar...</option>
-                    <option value="Macho" {% if animal['sexo'] == 'Macho' %}selected{% endif %}>Macho</option>
-                    <option value="Hembra" {% if animal['sexo'] == 'Hembra' %}selected{% endif %}>Hembra</option>
-                </select>
-            </div>
-            <div class="campo"><label>Raza</label><input type="text" name="raza" value="{{ animal['raza'] or '' }}"></div>
-            <div class="campo"><label>Edad</label><input type="text" name="edad" value="{{ animal['edad'] or '' }}"></div>
-            <div class="campo"><label>Peso</label><input type="text" name="peso" value="{{ animal['peso'] or '' }}"></div>
-            <div class="campo"><label>Observaciones</label><textarea name="observaciones" rows="3">{{ animal['observaciones'] or '' }}</textarea></div>
-            <button type="submit">💾 Guardar Cambios</button>
-        </form>
-    </div>
-</body>
-</html>
-    ''', animal=animal)
+    return render_template_string(LOGIN_HTML)
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('login'))
 
-with app.app_context():
-    init_db()
+# ================== LISTA DE ANIMALES ==================
+@app.route('/')
+def lista():
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    
+    buscar = request.args.get('buscar', '').strip()
+    
+    conn = sqlite3.connect('animales.db')
+    c = conn.cursor()
+    
+    if buscar:
+        c.execute("SELECT * FROM animales WHERE numero LIKE ? OR tipo LIKE ? OR dueño LIKE ? ORDER BY numero", 
+                  (f'%{buscar}%', f'%{buscar}%', f'%{buscar}%'))
+    else:
+        c.execute("SELECT * FROM animales ORDER BY numero DESC")
+    
+    animales = c.fetchall()
+    conn.close()
+    
+    return render_template_string(LISTA_HTML, animales=animales, buscar=buscar)
+
+# ================== VER DETALLES DE UN ANIMAL ==================
+@app.route('/animal/<int:id>')
+def ver_animal(id):
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    
+    conn = sqlite3.connect('animales.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM animales WHERE id = ?", (id,))
+    animal = c.fetchone()
+    conn.close()
+    
+    if not animal:
+        return "Animal no encontrado", 404
+    
+    return render_template_string(DETALLE_HTML, animal=animal)
+
+# ================== FORMULARIO DE REGISTRO ==================
+@app.route('/registro', methods=['GET', 'POST'])
+def registro():
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    
+    if request.method == 'POST':
+        numero = request.form.get('numero')
+        tipo = request.form.get('tipo')
+        raza = request.form.get('raza')
+        fecha_nacimiento = request.form.get('fecha_nacimiento')
+        peso = request.form.get('peso')
+        genero = request.form.get('genero')
+        color = request.form.get('color')
+        observaciones = request.form.get('observaciones')
+        dueño = request.form.get('dueño')
+        
+        conn = sqlite3.connect('animales.db')
+        c = conn.cursor()
+        c.execute('''INSERT INTO animales 
+                     (numero, tipo, raza, fecha_nacimiento, peso, genero, color, observaciones, dueño)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (numero, tipo, raza, fecha_nacimiento, peso, genero, color, observaciones, dueño))
+        conn.commit()
+        conn.close()
+        
+        return redirect(url_for('lista'))
+    
+    return render_template_string(REGISTRO_HTML)
+
+# ================== EDITAR ANIMAL ==================
+@app.route('/editar/<int:id>', methods=['GET', 'POST'])
+def editar(id):
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    
+    conn = sqlite3.connect('animales.db')
+    c = conn.cursor()
+    
+    if request.method == 'POST':
+        numero = request.form.get('numero')
+        tipo = request.form.get('tipo')
+        raza = request.form.get('raza')
+        fecha_nacimiento = request.form.get('fecha_nacimiento')
+        peso = request.form.get('peso')
+        genero = request.form.get('genero')
+        color = request.form.get('color')
+        observaciones = request.form.get('observaciones')
+        dueño = request.form.get('dueño')
+        
+        c.execute('''UPDATE animales SET numero=?, tipo=?, raza=?, fecha_nacimiento=?, 
+                     peso=?, genero=?, color=?, observaciones=?, dueño=? WHERE id=?''',
+                  (numero, tipo, raza, fecha_nacimiento, peso, genero, color, observaciones, dueño, id))
+        conn.commit()
+        conn.close()
+        return redirect(url_for('ver_animal', id=id))
+    
+    c.execute("SELECT * FROM animales WHERE id = ?", (id,))
+    animal = c.fetchone()
+    conn.close()
+    
+    if not animal:
+        return "Animal no encontrado", 404
+    
+    return render_template_string(EDITAR_HTML, animal=animal)
+
+# ================== ELIMINAR ANIMAL ==================
+@app.route('/eliminar/<int:id>', methods=['POST'])
+def eliminar(id):
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    
+    conn = sqlite3.connect('animales.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM animales WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('lista'))
+
+# ================== PLANTILLAS HTML ==================
+
+ESTILOS = '''
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; }
+    body { 
+        background: linear-gradient(rgba(255,255,255,0.85), rgba(255,255,255,0.85)), 
+                    url("https://images.unsplash.com/photo-1500382017920-7a9b2d285c06?w=1200");
+        background-size: cover;
+        background-attachment: fixed;
+        background-position: center;
+        min-height: 100vh;
+        padding: 20px;
+    }
+    .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+    h1 { text-align: center; color: #2c5f2d; margin-bottom: 30px; }
+    h2 { color: #4a7c4b; margin-bottom: 20px; }
+    .nav { display: flex; gap: 10px; margin-bottom: 25px; flex-wrap: wrap; }
+    .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; text-decoration: none; display: inline-block; transition: 0.3s; }
+    .btn-nuevo { background: #2c5f2d; color: white; }
+    .btn-nuevo:hover { background: #1f4520; }
+    .btn-editar { background: #f9a825; color: white; }
+    .btn-editar:hover { background: #f57c00; }
+    .btn-eliminar { background: #d32f2f; color: white; }
+    .btn-eliminar:hover { background: #b71c1c; }
+    .btn-volver { background: #6c757d; color: white; }
+    .btn-volver:hover { background: #545b62; }
+    .btn-salir { background: #343a40; color: white; }
+    .buscador { width: 100%; padding: 12px; margin-bottom: 20px; border: 2px solid #ddd; border-radius: 6px; font-size: 16px; }
+    .lista { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    .lista th, .lista td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+    .lista th { background: #2c5f2d; color: white; }
+    .lista tr:hover { background: #f1f8f1; }
+    .lista a { color: #2c5f2d; font-weight: bold; text-decoration: none; }
+    .form-group { margin-bottom: 15px; }
+    label { display: block; margin-bottom: 5px; font-weight: bold; color: #333; }
+    input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 15px; }
+    .detail-row { padding: 10px 0; border-bottom: 1px solid #eee; }
+    .label { font-weight: bold; display: inline-block; width: 120px; color: #2c5f2d; }
+    .error { color: #d32f2f; text-align: center; margin: 15px 0; }
+    .login-box { max-width: 400px; margin: 100px auto; padding: 30px; background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; }
+    .login-box h1 { margin-bottom: 25px; }
+</style>
+'''
+
+LOGIN_HTML = ESTILOS + '''
+<div class="login-box">
+    <h1>🌿 Finca Iberia</h1>
+    <h2>Iniciar Sesión</h2>
+    {% if error %}
+    <p class="error">Usuario o clave incorrectos</p>
+    {% endif %}
+    <form method="post">
+        <div class="form-group">
+            <label>Usuario:</label>
+            <input type="text" name="usuario" required autofocus>
+        </div>
+        <div class="form-group">
+            <label>Contraseña:</label>
+            <input type="password" name="clave" required>
+        </div>
+        <button type="submit" class="btn btn-nuevo" style="width:100%; margin-top:10px;">Ingresar</button>
+    </form>
+</div>
+'''
+
+LISTA_HTML = ESTILOS + '''
+<div class="container">
+    <h1>🐄 Finca Iberia — Lista de Animales</h1>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <a href="{{ url_for('registro') }}" class="btn btn-nuevo">+ Registrar Nuevo</a>
+        <a href="{{ url_for('logout') }}" class="btn btn-salir">Cerrar Sesión</a>
+    </div>
+    
+    <form method="get" style="margin-top:20px;">
+        <input type="text" name="buscar" class="buscador" placeholder="🔍 Buscar por número, tipo o dueño..." value="{{ buscar }}">
+    </form>
+    
+    {% if animales %}
+    <table class="lista">
+        <tr>
+            <th>Número</th>
+            <th>Tipo</th>
+            <th>Raza</th>
+            <th>Dueño</th>
+        </tr>
+        {% for animal in animales %}
+        <tr>
+            <td><a href="{{ url_for('ver_animal', id=animal[0]) }}">{{ animal[1] }}</a></td>
+            <td>{{ animal[2] }}</td>
+            <td>{{ animal[3] or '-' }}</td>
+            <td>{{ animal[9] }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p style="text-align:center; padding:30px; color:#666;">No hay animales registrados. ¡Registra el primero con el botón arriba!</p>
+    {% endif %}
+</div>
+'''
+
+DETALLE_HTML = ESTILOS + '''
+<div class="container">
+    <h1>🐂 Datos del Animal — {{ animal[1] }}</h1>
+    
+    <div class="detail-row">
+        <span class="label">🔢 Número:</span>
+        <span class="value">{{ animal[1] }}</span>
+    </div>
+    <div class="detail-row">
+        <span class="label">🐄 Tipo:</span>
+        <span class="value">{{ animal[2] }}</span>
+    </div>
+    <div class="detail-row">
+        <span class="label">🐮 Raza:</span>
+        <span class="value">{{ animal[3] or '-' }}</span>
+    </div>
+    <div class="detail-row">
+        <span class="label">📅 Nacimiento:</span>
+        <span class="value">{{ animal[4] or '-' }}</span>
+    </div>
+    <div class="detail-row">
+        <span class="label">⚖️ Peso:</span>
+        <span class="value">{{ animal[5] or '-' }}</span>
+    </div>
+    <div class="detail-row">
+        <span class="label">🚻 Género:</span>
+        <span class="value">{{ animal[6] or '-' }}</span>
+    </div>
+    <div class="detail-row">
+        <span class="label">🎨 Color:</span>
+        <span class="value">{{ animal[7] or '-' }}</span>
+    </div>
+    <div class="detail-row">
+        <span class="label">👤 Dueño:</span>
+        <span class="value">{{ animal[9] }}</span>
+    </div>
+    <div class="detail-row">
+        <span class="label">📝 Observaciones:</span>
+        <span class="value">{{ animal[8] or '-' }}</span>
+    </div>
+    
+    <div style="margin-top:30px; display:flex; gap:10px; flex-wrap:wrap;">
+        <a href="{{ url_for('editar', id=animal[0]) }}" class="btn btn-editar">✏️ Editar</a>
+        <form action="{{ url_for('eliminar', id=animal[0]) }}" method="post" onsubmit="return confirm('⚠️ ¿Seguro que quieres ELIMINAR este animal?\\nEsta acción NO se puede deshacer.');" style="display:inline;">
+            <button type="submit" class="btn btn-eliminar">🗑️ Eliminar</button>
+        </form>
+        <a href="{{ url_for('lista') }}" class="btn btn-volver">← Volver a la Lista</a>
+    </div>
+</div>
+'''
+
+REGISTRO_HTML = ESTILOS + '''
+<div class="container">
+    <h1>➕ Registrar Nuevo Animal</h1>
+    
+    <form method="post">
+        <div class="form-group">
+            <label>🔢 Número / Identificación:</label>
+            <input type="text" name="numero" required>
+        </div>
+        <div class="form-group">
+            <label>🐄 Tipo de animal:</label>
+            <input type="text" name="tipo" placeholder="Ej: Vaca, Toro, Ternera..." required>
+        </div>
+        <div class="form-group">
+            <label>🐮 Raza:</label>
+            <input type="text" name="raza">
+        </div>
+        <div class="form-group">
+            <label>📅 Fecha de nacimiento:</label>
+            <input type="date" name="fecha_nacimiento">
+        </div>
+        <div class="form-group">
+            <label>⚖️ Peso:</label>
+            <input type="text" name="peso" placeholder="Ej: 450 kg">
+        </div>
+        <div class="form-group">
+            <label>🚻 Género:</label>
+            <select name="genero">
+                <option value="">Seleccionar...</option>
+                <option value="Macho">Macho</option>
+                <option value="Hembra">Hembra</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>🎨 Color / Señas particulares:</label>
+            <input type="text" name="color">
+        </div>
+        <div class="form-group">
+            <label>👤 Dueño:</label>
+            <input type="text" name="dueño" required>
+        </div>
+        <div class="form-group">
+            <label>📝 Observaciones:</label>
+            <textarea name="observaciones" rows="4"></textarea>
+        </div>
+        
+        <div style="margin-top:25px; display:flex; gap:10px;">
+            <button type="submit" class="btn btn-nuevo">✅ Guardar Animal</button>
+            <a href="{{ url_for('lista') }}" class="btn btn-volver">← Cancelar</a>
+        </div>
+    </form>
+</div>
+'''
+
+EDITAR_HTML = ESTILOS + '''
+<div class="container">
+    <h1>✏️ Editar Animal — {{ animal[1] }}</h1>
+    
+    <form method="post">
+        <div class="form-group">
+            <label>🔢 Número / Identificación:</label>
+            <input type="text" name="numero" value="{{ animal[1] }}" required>
+        </div>
+        <div class="form-group">
+            <label>🐄 Tipo de animal:</label>
+            <input type="text" name="tipo" value="{{ animal[2] }}" required>
+        </div>
+        <div class="form-group">
+            <label>🐮 Raza:</label>
+            <input type="text" name="raza" value="{{ animal[3] or '' }}">
+        </div>
+        <div class="form-group">
+            <label>📅 Fecha de nacimiento:</label>
+            <input type="date" name="fecha_nacimiento" value="{{ animal[4] or '' }}">
+        </div>
+        <div class="form-group">
+            <label>⚖️ Peso:</label>
+            <input type="text" name="peso" value="{{ animal[5] or '' }}">
+        </div>
+        <div class="form-group">
+            <label>🚻 Género:</label>
+            <select name="genero">
+                <option value="">Seleccionar...</option>
+                <option value="Macho" {{ 'selected' if animal[6] == 'Macho' else '' }}>Macho</option>
+                <option value="Hembra" {{ 'selected' if animal[6] == 'Hembra' else '' }}>Hembra</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>🎨 Color / Señas particulares:</label>
+            <input type="text" name="color" value="{{ animal[7] or '' }}">
+        </div>
+        <div class="form-group">
+            <label>👤 Dueño:</label>
+            <input type="text" name="dueño" value="{{ animal[9] }}" required>
+        </div>
+        <div class="form-group">
+            <label>📝 Observaciones:</label>
+            <textarea name="observaciones" rows="4">{{ animal[8] or '' }}</textarea>
+        </div>
+        
+        <div style="margin-top:25px; display:flex; gap:10px;">
+            <button type="submit" class="btn btn-nuevo">💾 Guardar Cambios</button>
+            <a href="{{ url_for('ver_animal', id=animal[0]) }}" class="btn btn-volver">← Cancelar</a>
+        </div>
+    </form>
+</div>
+'''
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(debug=True)
